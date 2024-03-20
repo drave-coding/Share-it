@@ -25,6 +25,7 @@ var bcrypt = require("bcrypt");
 // to store files
 var fileSystem = require("fs");
 
+
 // to start the session
 var session = require("express-session");
 app.use(session({
@@ -108,6 +109,58 @@ function removeFileReturnUpdated(arr, _id) {
 
     return arr;
 }
+
+function generateEncryptionKey() {
+    const length = Math.floor(Math.random() * 7) + 6; // Random length between 6 and 12
+    const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let key = '';
+
+    for (let i = 0; i < length; i++) {
+        const randomIndex = Math.floor(Math.random() * characters.length);
+        key += characters.charAt(randomIndex);
+    }
+
+    return key;
+}
+
+
+//encrypted
+function encryptFile(fileData, key) {
+    // Convert file data to Buffer
+    const bufferData = Buffer.from(fileData);
+
+    // Convert key to Buffer
+    const bufferKey = Buffer.from(key);
+
+    // Encrypt file data using XOR operation
+    for (let i = 0; i < bufferData.length; i++) {
+        bufferData[i] ^= bufferKey[i % bufferKey.length];
+    }
+
+    // Return encrypted file data
+    return bufferData;
+}
+
+//decrypted
+function decryptFile(encryptedData, key) {
+    // Convert encrypted data to Buffer
+    const bufferData = Buffer.from(encryptedData);
+
+    // Convert key to Buffer
+    const bufferKey = Buffer.from(key);
+
+    // Decrypt encrypted data using XOR operation
+    for (let i = 0; i < bufferData.length; i++) {
+        bufferData[i] ^= bufferKey[i % bufferKey.length];
+    }
+
+    // Return decrypted file data
+    return bufferData;
+}
+
+
+
+
 
 // start the http server
 http.listen(3000, function () {
@@ -291,19 +344,26 @@ http.listen(3000, function () {
             var link = await database.collection("public_links").findOne({
                 "file._id": ObjectId(_id)
             });
-
+            // using link
             if (link != null) {
                 fileSystem.readFile(link.file.filePath, function (error, data) {
-                    // console.log(error);
-
-                    result.json({
-                        "status": "success",
-                        "message": "Download file successfully",
-                        "arrayBuffer": data,
-                        "fileType": link.file.type,
-                        // "file": mainURL + "/" + file.filePath,
-                        "fileName": link.file.name
-                    });
+                    if (error) {
+                        result.json({
+                            "status": "error",
+                            "message": "Error reading file."
+                        });
+                    } else {
+                        // Decrypt the file data using the user's encryption key
+                        const decryptedData = decryptFile(data, request.session.user.encryptionKey);
+        
+                        result.json({
+                            "status": "success",
+                            "message": "Download file successfully",
+                            "arrayBuffer": decryptedData,
+                            "fileType": link.file.type,
+                            "fileName": link.file.name
+                        });
+                    }
                 });
                 return false;
             }
@@ -325,18 +385,25 @@ http.listen(3000, function () {
                 }
 
                 var file = fileUploaded;
-
+        //By User
                 fileSystem.readFile(file.filePath, function (error, data) {
-                    // console.log(error);
-
-                    result.json({
-                        "status": "success",
-                        "message": "Data has been fetched.",
-                        "arrayBuffer": data,
-                        "fileType": file.type,
-                        // "file": mainURL + "/" + file.filePath,
-                        "fileName": file.name
-                    });
+                    if (error) {
+                        result.json({
+                            "status": "error",
+                            "message": "Error reading file."
+                        });
+                    } else {
+                        // Decrypt the file data using the user's encryption key
+                        const decryptedData = decryptFile(data, request.session.user.encryptionKey);
+        
+                        result.json({
+                            "status": "success",
+                            "message": "Data has been fetched.",
+                            "arrayBuffer": decryptedData,
+                            "fileType": file.type,
+                            "fileName": file.name
+                        });
+                    }
                 });
                 return false;
             }
@@ -402,10 +469,12 @@ http.listen(3000, function () {
                         if (err) throw err;
                         console.log('File read!');
 
+                        const encryptedData = encryptFile(data, user.encryptionKey);
+
                         // Write the file
-                        fileSystem.writeFile(filePath, data, async function (err) {
+                        fileSystem.writeFile(filePath, encryptedData, async function (err) {
                             if (err) throw err;
-                            console.log('File written!');
+                            console.log('encrypted file written!');
 
                             await database.collection("users").updateOne({
                                 "_id": ObjectId(request.session.user._id)
@@ -507,6 +576,8 @@ http.listen(3000, function () {
                 "email": email
             });
 
+            var key = generateEncryptionKey();
+
             if (user == null) {
                 bcrypt.hash(password, 10, async function (error, hash) {
                     await database.collection("users").insertOne({
@@ -516,7 +587,8 @@ http.listen(3000, function () {
                         "reset_token": reset_token,
                         "uploaded": [],
                         "isVerified": isVerified,
-                        "verification_token": verification_token
+                        "verification_token": verification_token,
+                        "encryptionKey": key
                     }, async function (error, data) {
 
                         request.status = "success";
